@@ -2,9 +2,13 @@
 
 Este repositorio gestiona la parte de usuario de X Linux en WSL. El cableado
 de sistema de WSL pertenece al rootfs de `xlnux/wsl` y no se toca:
-`/etc/wsl.conf` (systemd, red, usuario por defecto), el manejo de
-kernel/modulos y la habilitacion de interop de Windows quedan fuera del
-alcance de estos scripts.
+`/etc/wsl.conf` (systemd, red), el manejo de kernel/modulos y la habilitacion
+de interop de Windows quedan fuera del alcance de estos scripts. La unica
+excepcion es la clave `[user] default`: al crear un usuario real, este
+repositorio fija esa clave a el, porque las distribuciones importadas no
+tienen launcher de Windows y `/etc/wsl.conf` es la unica via soportada para
+cambiar su usuario por defecto. Solo se toca ese valor, nunca el resto del
+fichero.
 
 ## Fase de sistema (`stage-root.sh`, root)
 
@@ -13,9 +17,10 @@ alcance de estos scripts.
 | Locale    | activa el locale en `/etc/locale.gen`, ejecuta `locale-gen`, escribe `LANG` en `/etc/locale.conf` |
 | Teclado   | escribe `KEYMAP` en `/etc/vconsole.conf`                  |
 | Zona horaria | enlaza `/usr/share/zoneinfo/<zona>` a `/etc/localtime` y, con systemd activo, llama a `timedatectl set-timezone`. Con `windows-time` no escribe nada (WSL refleja el reloj de Windows) |
-| Herramientas | `pacman -S sudo git curl wget` (mas `zsh` cuando es el shell de login); se omite sin red o con `--no-install` |
+| Herramientas | `pacman -S sudo git curl wget` (mas el shell de login si no esta); se omite sin red o con `--no-install` |
 | Usuario   | crea o asegura el usuario, lo anade a `wheel` y fija su shell de login |
-| Sudo      | `/etc/sudoers.d/x-wsl-wheel` con `%wheel ALL=(ALL:ALL) NOPASSWD: ALL` (`nopasswd`) o `%wheel ALL=(ALL:ALL) ALL` (`password`); con `password` la contrasena del usuario se pide interactivamente |
+| Sudo      | `/etc/sudoers.d/x-wsl-wheel` con `%wheel ALL=(ALL:ALL) NOPASSWD: ALL` (`nopasswd`, el default) o `%wheel ALL=(ALL:ALL) ALL` (`password`); con `password` la contrasena del usuario se pide interactivamente |
+| Usuario por defecto | fija `[user] default=<usuario>` en `/etc/wsl.conf` (default; desactivable con `X_SET_DEFAULT_USER=0`). Si falta `/etc/wsl.conf` o se desactiva, la fase muestra guia |
 | Nota      | `/etc/profile.d/x-wsl.sh` registra el resumen de sistema   |
 
 La politica de sudo por defecto en WSL es `nopasswd`: la distro es un equipo
@@ -23,8 +28,12 @@ personal de un solo usuario y esto mantiene el flujo automatico. Elige
 `password` cuando el usuario necesite una frontera de credenciales (entonces
 se pide y fija una contrasena).
 
-Si `/etc/wsl.conf` no fija el usuario por defecto, la fase muestra una pista;
-no edita el fichero porque pertenece al rootfs de `xlnux/wsl`.
+El usuario por defecto de la distribucion se cambia mediante la clave
+`[user] default` de `/etc/wsl.conf`, el metodo documentado para
+distribuciones importadas. WSL lo lee al arrancar la instancia, asi que la
+fase indica salir y relanzar antes de la fase de usuario. Cuando falta
+`/etc/wsl.conf` o el pin se desactivo, un aviso explica como fijar la clave a
+mano o lanzar con `wsl -d <distro> -u <usuario>`.
 
 ## Fase de usuario (`stage-user.sh`, usuario normal)
 
@@ -54,5 +63,6 @@ del usuario. Las variables `WSL_INTEROP` y relacionadas no se tocan.
 - `/etc/locale.gen`, `/etc/locale.conf`, `/etc/vconsole.conf`, `/etc/localtime`
 - `/etc/sudoers.d/x-wsl-wheel`
 - `/etc/profile.d/x-wsl.sh`
+- `/etc/wsl.conf` - solo el valor `[user] default` (el resto intacto)
 - `~/.profile`, `~/.bashrc` (o `~/.zprofile`, `~/.zshrc` con zsh)
 - `~/.local/bin`, `~/.config/x`, `~/Projects`

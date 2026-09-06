@@ -180,7 +180,15 @@ else
 fi
 echo
 echo "Next steps:"
-echo "  1. Open a new terminal (or run: wsl --terminate <distro>)."
+echo "  1. Start a new session so the shell reads the updated rc files"
+echo "     (exit and reopen, or from Windows run: wsl --terminate <distro>"
+echo "     followed by wsl -d <distro>)."
 echo "  2. Check the environment:  echo \$EDITOR \$XDG_CONFIG_HOME"
 echo "  3. Your project folder is ready at: $TARGET_HOME/Projects"
+if x_is_wsl && [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
+    echo
+    echo "If the new session still opens as root, the [user] default of"
+    echo "/etc/wsl.conf is not pointing at $TARGET_USER. Set it there or"
+    echo "launch from Windows with:  wsl -d ${WSL_DISTRO_NAME} -u $TARGET_USER"
+fi
 echo

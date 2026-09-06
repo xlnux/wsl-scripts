@@ -21,8 +21,9 @@ usage() {
     cat <<'EOF'
 Usage: setup.sh [system options...]
 
-Friendly setup for X Linux on WSL. Run on the freshly imported distro to
-configure locale, keyboard, timezone, the sudo user and the user environment.
+Direct dispatcher of the X Linux on WSL setup. New users normally run the
+guided wrapper instead (./install.sh); setup.sh exposes the same flow with
+less prose and forwards system options to stage-root.sh.
 
 Context detection:
   root, no SUDO_USER (default WSL login)   -> system stage

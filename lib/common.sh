@@ -98,6 +98,79 @@ x_require_root() {
     exit 1
 }
 
+# ---------------------------------------------------------------------------
+# /etc/wsl.conf helpers.
+#
+# Imported WSL distributions have no Windows launcher, so the only supported
+# way to change their default user is the [user] default key in /etc/wsl.conf
+# (see "Change the default user for a distribution" and the [user] settings in
+# https://learn.microsoft.com/en-us/windows/wsl/basic-commands and
+# https://learn.microsoft.com/en-us/windows/wsl/wsl-config). These helpers keep
+# that file intact and only ever touch the default user value.
+# ---------------------------------------------------------------------------
+
+# Print the current [user] default value of a wsl.conf file (empty if absent).
+x_wsl_conf_default() {
+    local file="$1"
+    [[ -f "$file" ]] || return 0
+    awk '
+        /^[[:space:]]*\[/ {
+            if ($0 ~ /^[[:space:]]*\[[[:space:]]*user[[:space:]]*\]/) { inuser = 1 } else { inuser = 0 }
+            next
+        }
+        inuser && /^[[:space:]]*default[[:space:]]*=/ {
+            sub(/^[[:space:]]*default[[:space:]]*=[[:space:]]*/, "")
+            sub(/[[:space:]]+$/, "")
+            print
+            exit
+        }
+    ' "$file"
+}
+
+# Set [user] default=USER in a wsl.conf file. Idempotent and non-destructive:
+# comments and every other section ([boot], [interop], [network], [time], ...)
+# are preserved. Returns 1 when the file does not exist.
+x_wsl_conf_set_default() {
+    local file="$1" user="$2" tmp
+    [[ -f "$file" ]] || return 1
+    tmp="${file}.xwsl.tmp"
+    if ! awk -v user="$user" '
+        { lines[NR] = $0 }
+        END {
+            n = NR
+            uh = 0
+            dl = 0
+            for (i = 1; i <= n; i++) {
+                if (lines[i] ~ /^[[:space:]]*\[[[:space:]]*user[[:space:]]*\]/) { uh = i }
+            }
+            if (uh > 0) {
+                bend = n
+                for (i = uh + 1; i <= n; i++) {
+                    if (lines[i] ~ /^[[:space:]]*\[/) { bend = i - 1; break }
+                }
+                for (i = uh + 1; i <= bend; i++) {
+                    if (lines[i] ~ /^[[:space:]]*default[[:space:]]*=/) { dl = i; break }
+                }
+            }
+            for (i = 1; i <= n; i++) {
+                if (dl > 0 && i == dl) { print "default=" user; continue }
+                print lines[i]
+                if (uh > 0 && i == uh && dl == 0) { print "default=" user }
+            }
+            if (uh == 0) {
+                print ""
+                print "[user]"
+                print "default=" user
+            }
+        }
+    ' "$file" > "$tmp"; then
+        rm -f -- "$tmp"
+        return 1
+    fi
+    chmod 0644 "$tmp"
+    mv -- "$tmp" "$file"
+}
+
 # User stage: must run as a regular user. When invoked as root through sudo,
 # drop back to the invoking user before applying anything.
 x_require_user() {

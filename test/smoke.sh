@@ -49,6 +49,42 @@ check "ui_has_gum false without gum" \
     </dev/null
 
 # ---------------------------------------------------------------------------
+# lib/common.sh: /etc/wsl.conf default-user helpers (temp file only).
+# ---------------------------------------------------------------------------
+echo "== wsl.conf default-user helpers =="
+WCONF="$TMP/wsl.conf"
+cat >"$WCONF" <<'EOF'
+# managed test file
+[boot]
+systemd=true
+
+# shipped as root
+[user]
+default=root
+
+[interop]
+enabled=true
+appendWindowsPath=true
+EOF
+check "x_wsl_conf_default reads the current default" \
+    bash -c 'source "$1/lib/common.sh"; test "$(x_wsl_conf_default "$2")" = root' \
+    _ "$SRC" "$WCONF"
+bash -c 'source "$1/lib/common.sh"; x_wsl_conf_set_default "$2" smokeuser' _ "$SRC" "$WCONF"
+check "x_wsl_conf_set_default replaces the value" \
+    bash -c 'source "$1/lib/common.sh"; test "$(x_wsl_conf_default "$2")" = smokeuser' \
+    _ "$SRC" "$WCONF"
+check "set keeps the other sections intact" \
+    bash -c 'source "$1/lib/common.sh"; grep -q "^systemd=true" "$2" && grep -q "enabled=true" "$2"' \
+    _ "$SRC" "$WCONF"
+bash -c 'source "$1/lib/common.sh"; x_wsl_conf_set_default "$2" smokeuser' _ "$SRC" "$WCONF"
+check "set is idempotent (single [user], single default)" \
+    bash -c 'source "$1/lib/common.sh"; test "$(grep -c "^\[user\]" "$2")" -eq 1 && test "$(grep -c "^default=" "$2")" -eq 1' \
+    _ "$SRC" "$WCONF"
+check "missing file leaves the default empty and never creates it" \
+    bash -c 'source "$1/lib/common.sh"; test -z "$(x_wsl_conf_default "$2")" && test ! -e "$2"' \
+    _ "$SRC" "$TMP/does-not-exist"
+
+# ---------------------------------------------------------------------------
 # stage-root.sh: dry run (non-root), explicit system options.
 # ---------------------------------------------------------------------------
 echo "== stage-root dry run =="
@@ -147,6 +183,40 @@ else
 fi
 check "setup.sh explains the root requirement" \
     grep -q "system options require root" "$TMP/setup-root.out"
+
+# ---------------------------------------------------------------------------
+# install.sh: friendly wrapper dispatch and help.
+# ---------------------------------------------------------------------------
+echo "== install wrapper =="
+set +e
+bash "$SRC/install.sh" --help >"$TMP/install-help.out" 2>&1
+INSTALL_HELP_RC=$?
+set -e
+check "install.sh --help exits 0" test "$INSTALL_HELP_RC" -eq 0
+check "install.sh help explains the two parts" \
+    grep -q "Part 1" "$TMP/install-help.out"
+
+set +e
+HOME="$APPLY_HOME" X_DRY=1 X_AUTO=1 \
+    bash "$SRC/install.sh" >"$TMP/install-user.out" 2>&1
+INSTALL_RC=$?
+set -e
+check "install.sh as regular user exits 0" test "$INSTALL_RC" -eq 0
+check "install.sh dispatches to the user stage" \
+    grep -q "environment block" "$TMP/install-user.out"
+
+set +e
+HOME="$APPLY_HOME" X_DRY=1 X_AUTO=1 \
+    bash "$SRC/install.sh" --locale fr_FR.UTF-8 >"$TMP/install-root.out" 2>&1
+INSTALL_SYS_RC=$?
+set -e
+if [[ "$INSTALL_SYS_RC" -eq 0 ]]; then
+    check "install.sh system options as regular user refuse" false
+else
+    check "install.sh system options as regular user refuse" true
+fi
+check "install.sh explains the root requirement" \
+    grep -q "system options require root" "$TMP/install-root.out"
 
 # ---------------------------------------------------------------------------
 echo

@@ -17,8 +17,8 @@ Usage: stage-root.sh [options]
 
 Configures the WSL system: base tools, locale, keyboard, timezone and the
 sudo user. Run as root (a fresh WSL import boots as root). Values can also
-be given through X_LOCALE, X_KEYMAP, X_TIMEZONE, X_USER, X_SHELL, X_SUDO
-and X_INSTALL environment variables.
+be given through X_LOCALE, X_KEYMAP, X_TIMEZONE, X_USER, X_SHELL, X_SUDO,
+X_INSTALL and X_SET_DEFAULT_USER environment variables.
 
 Options:
   --locale LOCALE   Locale to enable and set as LANG (default en_US.UTF-8).
@@ -28,13 +28,18 @@ Options:
   --user NAME       User to create or ensure with sudo (default SUDO_USER,
                     else 'x').
   --shell SHELL     Login shell for the user: zsh or bash (default zsh).
-  --sudo POLICY     Sudo policy: nopasswd or password (default: interactive).
+  --sudo POLICY     Sudo policy: nopasswd (default, recommended for WSL) or
+                    password (prompted interactively).
   --no-install      Do not install base tools with pacman.
   -h, --help        Show this help.
 
 Environment:
   X_DRY=1           Print the plan without applying changes.
   X_AUTO=1          Use defaults without prompting (requires no tty).
+  X_SET_DEFAULT_USER=1|0
+                    Pin the created user as the default user of new WSL
+                    sessions in /etc/wsl.conf. Defaults to yes (1) unless
+                    the file is absent; set 0 to keep logging in as root.
 EOF
 }
 
@@ -249,6 +254,7 @@ if ! x_is_dry; then
 # System locale/keymap/timezone/user live in:
 #   /etc/locale.conf  /etc/vconsole.conf  /etc/localtime
 #   /etc/sudoers.d/x-wsl-wheel
+# The default WSL login user is the [user] default key of /etc/wsl.conf.
 # Per-user environment is applied by stage-user.sh (xlnux/wsl-scripts).
 PROFILE_NOTE
 fi
@@ -317,24 +323,111 @@ if [[ "$SUDO_POLICY" == "password" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# WSL default user hint (wsl.conf itself is owned by the xlnux/wsl rootfs).
+# Default user for new WSL sessions ([user] default in /etc/wsl.conf).
+#
+# Imported distributions have no Windows launcher, so their default user can
+# only be changed through /etc/wsl.conf (see "Change the default user for a
+# distribution" and the [user] section of the official WSL docs). The initial
+# file shipped by xlnux/wsl keeps default=root so the first import always
+# boots; once a real user exists we point that key at it. Editing only ever
+# touches the [user] default value, never the rest of the file.
 # ---------------------------------------------------------------------------
 
-if x_is_wsl && [[ -f /etc/wsl.conf ]]; then
-    if grep -q "^[[:space:]]*default[[:space:]]*=[[:space:]]*$USER_NAME" /etc/wsl.conf; then
-        log_ok "wsl.conf already logs in as $USER_NAME"
-    else
-        log_warn "/etc/wsl.conf does not pin the default user to $USER_NAME"
-        log_warn "set '[user] default=$USER_NAME' there, or start WSL with: wsl -d <distro> -u $USER_NAME"
+DISTRO="${WSL_DISTRO_NAME:-<distro>}"
+
+SET_DEFAULT_USER=""
+if x_is_dry; then
+    SET_DEFAULT_USER=1
+elif [[ -n "${X_SET_DEFAULT_USER:-}" ]]; then
+    SET_DEFAULT_USER="$X_SET_DEFAULT_USER"
+fi
+case "$SET_DEFAULT_USER" in
+    0 | 1) ;;
+    '')
+        if [[ -f /etc/wsl.conf ]] || x_is_wsl; then
+            if ask_yesno "Make ${USER_NAME} the default user of new WSL sessions (recommended)?" yes; then
+                SET_DEFAULT_USER=1
+            else
+                SET_DEFAULT_USER=0
+            fi
+        else
+            SET_DEFAULT_USER=0
+        fi
+        ;;
+    *)
+        log_err "invalid X_SET_DEFAULT_USER: $SET_DEFAULT_USER (expected 1 or 0)"
+        exit 1
+        ;;
+esac
+
+if [[ "$SET_DEFAULT_USER" == 1 ]]; then
+    if [[ -f /etc/wsl.conf ]]; then
+        CURRENT_DEFAULT="$(x_wsl_conf_default /etc/wsl.conf)"
+        if [[ "$CURRENT_DEFAULT" == "$USER_NAME" ]]; then
+            log_ok "/etc/wsl.conf already logs new sessions in as $USER_NAME"
+        else
+            x_step "pin [user] default=$USER_NAME in /etc/wsl.conf"
+            if ! x_is_dry; then
+                if x_wsl_conf_set_default /etc/wsl.conf "$USER_NAME"; then
+                    log_ok "/etc/wsl.conf now logs new sessions in as $USER_NAME"
+                else
+                    log_warn "could not write /etc/wsl.conf; keeping its current default"
+                fi
+            fi
+        fi
+    elif ! x_is_dry; then
+        log_warn "/etc/wsl.conf not found; new sessions will keep booting as root"
     fi
 fi
+
+# What the final summary should tell the user about the default login user.
+DEFAULT_USER_STATE=not_pinned
+if [[ -f /etc/wsl.conf ]] && [[ "$(x_wsl_conf_default /etc/wsl.conf)" == "$USER_NAME" ]]; then
+    DEFAULT_USER_STATE=pinned
+elif x_is_dry && [[ "$SET_DEFAULT_USER" == 1 ]] && [[ -f /etc/wsl.conf ]]; then
+    DEFAULT_USER_STATE=will_pin
+fi
+
+# ---------------------------------------------------------------------------
+# Summary and next steps.
+# ---------------------------------------------------------------------------
 
 log_ok "system stage complete"
 if x_is_dry; then
     log_info "dry-run: nothing was applied"
 fi
+
+if [[ "$DEFAULT_USER_STATE" == not_pinned ]] && ! x_is_dry && [[ -f /etc/wsl.conf ]]; then
+    log_warn "/etc/wsl.conf does not pin the default user to $USER_NAME"
+    log_warn "new sessions will still open as root until you set:"
+    log_warn "  [user] default=$USER_NAME   (in /etc/wsl.conf)"
+fi
+
 echo
-echo "Next step (user stage):"
-echo "  1. Exit this distro and reopen it (or run: wsl --terminate <distro>)."
-echo "  2. As $USER_NAME run:  ./setup.sh"
+echo "The user '$USER_NAME' is ready with the requested locale, keymap,"
+echo "timezone and sudo access. The user environment is configured next."
+echo
+
+if x_is_wsl; then
+    if [[ "$DEFAULT_USER_STATE" == pinned || "$DEFAULT_USER_STATE" == will_pin ]]; then
+        echo "Exit this session and relaunch the distribution from Windows; WSL"
+        echo "applies /etc/wsl.conf on start and the new session opens as '$USER_NAME':"
+        echo "    wsl --terminate ${DISTRO}"
+        echo "    wsl -d ${DISTRO}"
+    else
+        echo "Exit this session and relaunch as '$USER_NAME' from Windows:"
+        echo "    wsl --terminate ${DISTRO}"
+        echo "    wsl -d ${DISTRO} -u ${USER_NAME}"
+    fi
+else
+    echo "Log in as '$USER_NAME' (for example: su - $USER_NAME)."
+fi
+echo
+echo "Then run the user stage from a checkout of this repository that the"
+echo "user can read (if you cloned it under /root, move it first, e.g. to"
+echo "a shared path such as /opt/x-wsl-scripts):"
+echo "    ${SRC_DIR}/install.sh"
+echo
+echo "That second run configures the shell prompt, environment variables"
+echo "and the development folders (see stage-user.sh and the docs)."
 echo
